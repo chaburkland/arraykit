@@ -10,6 +10,7 @@ from arraykit import column_1d_filter
 from arraykit import row_1d_filter
 from arraykit import mloc
 from arraykit import immutable_filter
+from arraykit import slice_to_ascending_slice
 
 from performance.reference.util import mloc as mloc_ref
 
@@ -167,8 +168,20 @@ class TestUnit(unittest.TestCase):
         with self.assertRaises(NotImplementedError):
             row_1d_filter(a1.reshape(1,2,5))
 
+    def test_slice_to_ascending_slice(self) -> None:
+        a1 = np.arange(10)
+
+        def compare(slc: slice) -> None:
+            slc_asc = slice_to_ascending_slice(slc, len(a1))
+            self.assertEqual(sorted(a1[slc]), list(a1[slc_asc]))
+
+        compare(slice(4,))
+        compare(slice(6, 1, -1))
+        compare(slice(6, 1, -2))
+        compare(slice(6, None, -3))
+        compare(slice(6, 2, -2))
+        compare(slice(None, 1, -1))
+
+
 if __name__ == '__main__':
     unittest.main()
-
-
-

@@ -271,6 +271,161 @@ resolve_dtype_iter(PyObject *Py_UNUSED(m), PyObject *arg)
 }
 
 //------------------------------------------------------------------------------
+// slices
+
+static long
+AK_long_to_long_handle_overflow(PyObject *num)
+{
+    int overflow;
+    long result = PyLong_AsLongAndOverflow(num, &overflow);
+
+    if (overflow == -1) {
+        return LONG_MIN;
+    }
+    else if (overflow == 1) {
+        return LONG_MAX;
+    }
+
+    return result;
+}
+
+static PyObject *
+AK_slice_from_longs(long start, long stop, long step, uint8_t start_is_none,
+                    uint8_t stop_is_none, uint8_t step_is_none)
+{
+    PyObject *start_obj = Py_None;
+    PyObject *stop_obj = Py_None;
+    PyObject *step_obj = Py_None;
+
+    if (!start_is_none) {
+        start_obj = PyLong_FromLong(start);
+        if (!start_obj) {
+            return NULL;
+        }
+    }
+    else {
+        Py_INCREF(start_obj);
+    }
+
+    if (!stop_is_none) {
+        stop_obj = PyLong_FromLong(stop);
+        if (!stop_obj) {
+            Py_DECREF(start_obj);
+            return NULL;
+        }
+    }
+    else {
+        Py_INCREF(stop_obj);
+    }
+
+    if (!step_is_none) {
+        step_obj = PyLong_FromLong(step);
+        if (!step_obj) {
+            Py_DECREF(start_obj);
+            Py_DECREF(step_obj);
+            return NULL;
+        }
+    }
+    else {
+        Py_INCREF(step_obj);
+    }
+
+    PyObject *slice = PySlice_New(start_obj, stop_obj, step_obj);
+    Py_DECREF(start_obj);
+    Py_DECREF(stop_obj);
+    Py_DECREF(step_obj);
+
+    return slice;
+}
+
+static PyObject *
+slice_to_ascending_slice(PyTypeObject *cls, PyObject *args, PyObject *kwargs)
+{
+    PyObject *key;
+    int size;
+    static char *kwlist[] = {"key", "size", NULL};
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O!i:slice_to_ascending_slice",
+                                     kwlist,
+                                     &PySlice_Type, &key,
+                                     &size))
+    {
+        return NULL;
+    }
+
+    // 1. Extract slice attributes into c-longs
+    PyObject *key_start_obj = PyObject_GetAttrString(key, "start");
+    PyObject *key_stop_obj  = PyObject_GetAttrString(key, "stop");
+    PyObject *key_step_obj  = PyObject_GetAttrString(key, "step");
+
+    uint8_t key_start_is_none = (key_start_obj == Py_None);
+    uint8_t key_stop_is_none = (key_stop_obj == Py_None);
+    uint8_t key_step_is_none = (key_step_obj == Py_None);
+
+    long key_start = 0;
+    long key_stop = 0;
+    long key_step = 0;
+
+    if (!key_start_is_none) {
+        key_start = AK_long_to_long_handle_overflow(key_start_obj);
+    }
+    if (!key_stop_is_none) {
+        key_stop = AK_long_to_long_handle_overflow(key_stop_obj);
+    }
+    if (!key_step_is_none) {
+        key_step = AK_long_to_long_handle_overflow(key_step_obj);
+    }
+
+    // 2. Handle slices that are already ascending
+    if (key_step_is_none || key_step > 0) {
+        Py_INCREF(key);
+        return key;
+    }
+
+    // We use NULL to indicate None
+    long start = 0;
+    long stop = 0;
+    long step = 0;
+
+    uint8_t start_is_none = 0;
+    uint8_t stop_is_none = 0;
+
+    // 3. Determine the proper stop
+    if (!key_start_is_none) {
+        stop = key_start + 1;
+    }
+    else {
+        stop_is_none = 1;
+    }
+
+    // 4. Handle easy case where slice is descending with step=1
+    if (key_step == -1) {
+        if (!key_stop_is_none) {
+            start = key_stop + 1;
+        }
+        else {
+            start_is_none = 1;
+        }
+        step = 1;
+    }
+
+    // 5. Handle else
+    else {
+        step = Py_ABS(key_step);
+        start = key_start_is_none ? (size - 1) : Py_MIN((size - 1), key_start);
+
+        if (key_stop_is_none) {
+            start = start - (step * (start / step));
+        }
+        else {
+            start = start - (step * ((start - key_stop - 1) / step));
+        }
+    }
+
+    return AK_slice_from_longs(start, stop, step, start_is_none, stop_is_none, 0);
+}
+
+//------------------------------------------------------------------------------
 // ArrayGO
 //------------------------------------------------------------------------------
 
@@ -546,6 +701,7 @@ static PyMethodDef arraykit_methods[] =  {
     {"row_1d_filter", row_1d_filter, METH_O, NULL},
     {"resolve_dtype", resolve_dtype, METH_VARARGS, NULL},
     {"resolve_dtype_iter", resolve_dtype_iter, METH_O, NULL},
+    {"slice_to_ascending_slice", (PyCFunction)slice_to_ascending_slice, METH_VARARGS | METH_KEYWORDS, NULL},
     {NULL},
 };
 

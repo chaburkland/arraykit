@@ -181,3 +181,32 @@ def array_deepcopy(
     if memo is not None:
         memo[ident] = post
     return post
+
+def slice_to_ascending_slice(key: slice, size: int) -> slice:
+    '''
+    Given a slice, return a slice that, with ascending integers, covers the same values.
+
+    Args:
+        size: the length of the container on this axis
+    '''
+    # NOTE: a slice can have start > stop, and None as step: should that case be handled here?
+
+    if key.step is None or key.step > 0:
+        return key
+
+    stop = key.start if key.start is None else key.start + 1
+
+    if key.step == -1:
+        # if 6, 1, -1, then
+        start = key.stop if key.stop is None else key.stop + 1
+        return slice(start, stop, 1)
+
+    step = abs(key.step)
+    start = size - 1 if key.start is None else min(size - 1, key.start)
+
+    if key.stop is None:
+        start = start - (step * (start // step))
+    else:
+        start = start - (step * ((start - key.stop - 1) // step))
+
+    return slice(start, stop, step)
