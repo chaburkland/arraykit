@@ -273,31 +273,32 @@ resolve_dtype_iter(PyObject *Py_UNUSED(m), PyObject *arg)
 //------------------------------------------------------------------------------
 // slices
 
+// Will return -1 on failure. Must call PyErr_Occurred() to disambiguate.
 static long
-AK_long_to_long_handle_overflow(PyObject *num)
+AK_long_to_long_handle_overflow(PyObject *num, long neg_overflow, long pos_overflow)
 {
     int overflow;
     long result = PyLong_AsLongAndOverflow(num, &overflow);
 
     if (overflow == -1) {
-        return LONG_MIN;
+        return neg_overflow;
     }
     else if (overflow == 1) {
-        return LONG_MAX;
+        return pos_overflow;
     }
 
     return result;
 }
 
 static PyObject *
-AK_slice_from_longs(long start, long stop, long step, uint8_t start_is_none,
-                    uint8_t stop_is_none, uint8_t step_is_none)
+AK_slice_from_longs(long start, long stop, long step, uint8_t start_none_override,
+                    uint8_t stop_none_override, uint8_t step_none_override)
 {
     PyObject *start_obj = Py_None;
     PyObject *stop_obj = Py_None;
     PyObject *step_obj = Py_None;
 
-    if (!start_is_none) {
+    if (!start_none_override) {
         start_obj = PyLong_FromLong(start);
         if (!start_obj) {
             return NULL;
@@ -307,7 +308,7 @@ AK_slice_from_longs(long start, long stop, long step, uint8_t start_is_none,
         Py_INCREF(start_obj);
     }
 
-    if (!stop_is_none) {
+    if (!stop_none_override) {
         stop_obj = PyLong_FromLong(stop);
         if (!stop_obj) {
             Py_DECREF(start_obj);
@@ -318,7 +319,7 @@ AK_slice_from_longs(long start, long stop, long step, uint8_t start_is_none,
         Py_INCREF(stop_obj);
     }
 
-    if (!step_is_none) {
+    if (!step_none_override) {
         step_obj = PyLong_FromLong(step);
         if (!step_obj) {
             Py_DECREF(start_obj);
@@ -354,9 +355,22 @@ slice_to_ascending_slice(PyTypeObject *cls, PyObject *args, PyObject *kwargs)
     }
 
     // 1. Extract slice attributes into c-longs
+    // 1.a Extract attributes into PyObject* 's
     PyObject *key_start_obj = PyObject_GetAttrString(key, "start");
+    if (!key_start_obj) {
+        return NULL;
+    }
     PyObject *key_stop_obj  = PyObject_GetAttrString(key, "stop");
+    if (!key_stop_obj) {
+        Py_DECREF(key_start_obj);
+        return NULL;
+    }
     PyObject *key_step_obj  = PyObject_GetAttrString(key, "step");
+    if (!key_step_obj) {
+        Py_DECREF(key_start_obj);
+        Py_DECREF(key_stop_obj);
+        return NULL;
+    }
 
     uint8_t key_start_is_none = (key_start_obj == Py_None);
     uint8_t key_stop_is_none = (key_stop_obj == Py_None);
@@ -366,14 +380,36 @@ slice_to_ascending_slice(PyTypeObject *cls, PyObject *args, PyObject *kwargs)
     long key_stop = 0;
     long key_step = 0;
 
+    // 1.b Extract c-longs from the attribute PyObject* 's. We can clip these values
+    //     at the boundaries of c-longs, since no computer contains enough memory
+    //     to hold a container with more than 2**64 elements. With slices, values
+    //     greater than the size of the container all mean the same thing, so we
+    //     can confidently truncate these. Also, we offset these overflows by one
+    //     since each of these values can potentially be incremented in our algorithm's
+    //     arithmetic.
     if (!key_start_is_none) {
-        key_start = AK_long_to_long_handle_overflow(key_start_obj);
+        key_start = AK_long_to_long_handle_overflow(key_start_obj, LONG_MIN + 1, LONG_MAX - 1);
+        Py_DECREF(key_start_obj);
+        if (key_start == -1 && PyErr_Occurred()) {
+            Py_DECREF(key_stop_obj);
+            Py_DECREF(key_step_obj);
+            return NULL;
+        }
     }
     if (!key_stop_is_none) {
-        key_stop = AK_long_to_long_handle_overflow(key_stop_obj);
+        key_stop = AK_long_to_long_handle_overflow(key_stop_obj, LONG_MIN + 1, LONG_MAX - 1);
+        Py_DECREF(key_stop_obj);
+        if (key_stop == -1 && PyErr_Occurred()) {
+            Py_DECREF(key_step_obj);
+            return NULL;
+        }
     }
     if (!key_step_is_none) {
-        key_step = AK_long_to_long_handle_overflow(key_step_obj);
+        key_step = AK_long_to_long_handle_overflow(key_step_obj, LONG_MIN + 1, LONG_MAX - 1);
+        Py_DECREF(key_step_obj);
+        if (key_step == -1 && PyErr_Occurred()) {
+            return NULL;
+        }
     }
 
     // 2. Handle slices that are already ascending
@@ -381,8 +417,11 @@ slice_to_ascending_slice(PyTypeObject *cls, PyObject *args, PyObject *kwargs)
         Py_INCREF(key);
         return key;
     }
+    else if (key_step == 0) {
+        PyErr_SetString(PyExc_ValueError, "Slice steps must be non-zero!");
+        return NULL;
+    }
 
-    // We use NULL to indicate None
     long start = 0;
     long stop = 0;
     long step = 0;
@@ -411,7 +450,7 @@ slice_to_ascending_slice(PyTypeObject *cls, PyObject *args, PyObject *kwargs)
 
     // 5. Handle else
     else {
-        step = Py_ABS(key_step);
+        step = -key_step;
         start = key_start_is_none ? (size - 1) : Py_MIN((size - 1), key_start);
 
         if (key_stop_is_none) {
@@ -422,6 +461,7 @@ slice_to_ascending_slice(PyTypeObject *cls, PyObject *args, PyObject *kwargs)
         }
     }
 
+    // Step will always be non-none
     return AK_slice_from_longs(start, stop, step, start_is_none, stop_is_none, 0);
 }
 

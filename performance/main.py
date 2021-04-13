@@ -1,6 +1,4 @@
-
-
-
+import itertools as it
 import timeit
 import argparse
 
@@ -15,6 +13,7 @@ from performance.reference.util import column_1d_filter as column_1d_filter_ref
 from performance.reference.util import row_1d_filter as row_1d_filter_ref
 from performance.reference.util import resolve_dtype as resolve_dtype_ref
 from performance.reference.util import resolve_dtype_iter as resolve_dtype_iter_ref
+from performance.reference.util import slice_to_ascending_slice as slice_to_ascending_slice_ref
 
 from performance.reference.array_go import ArrayGO as ArrayGOREF
 
@@ -27,6 +26,7 @@ from arraykit import column_1d_filter as column_1d_filter_ak
 from arraykit import row_1d_filter as row_1d_filter_ak
 from arraykit import resolve_dtype as resolve_dtype_ak
 from arraykit import resolve_dtype_iter as resolve_dtype_iter_ak
+from arraykit import slice_to_ascending_slice as slice_to_ascending_slice_ak
 
 from arraykit import ArrayGO as ArrayGOAK
 
@@ -220,6 +220,23 @@ class ArrayGOPerfAK(ArrayGOPerf):
 class ArrayGOPerfREF(ArrayGOPerf):
     entry = staticmethod(ArrayGOREF)
 
+#-------------------------------------------------------------------------------
+class SliceToAscendingSlicePerf(Perf):
+    NUMBER = 50
+
+    def pre(self):
+        values = list(range(-20, 20)) + [None]
+        self.slices = list((slice(start, stop, step) for (start, stop, step) in it.product(values, values, values) if step != 0))
+
+    def main(self):
+        for _slice in self.slices:
+            self.entry(_slice, 10)
+
+class SliceToAscendingSlicePerfAK(SliceToAscendingSlicePerf):
+    entry = staticmethod(slice_to_ascending_slice_ak)
+
+class SliceToAscendingSlicePerfREF(SliceToAscendingSlicePerf):
+    entry = staticmethod(slice_to_ascending_slice_ref)
 
 #-------------------------------------------------------------------------------
 
